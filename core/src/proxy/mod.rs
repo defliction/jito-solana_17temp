@@ -16,10 +16,7 @@ pub mod fetch_stage_manager;
 pub mod relayer_stage;
 
 use {
-    std::{
-        net::{AddrParseError, SocketAddr},
-        result,
-    },
+    std::net::{AddrParseError, SocketAddr},
     thiserror::Error,
     tonic::Status,
 };

@@ -19,7 +19,6 @@ use {
     },
 };
 
-const HEARTBEAT_TIMEOUT: Duration = Duration::from_millis(1500); // Empirically determined from load testing
 const DISCONNECT_DELAY: Duration = Duration::from_secs(60);
 const METRICS_CADENCE: Duration = Duration::from_secs(1);
 
