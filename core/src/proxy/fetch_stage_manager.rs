@@ -1,3 +1,6 @@
+use crate::proxy::relayer_stage::RelayerConfig;
+use crate::proxy::ProxyResult;
+use std::sync::Mutex;
 use {
     crate::proxy::{HeartbeatEvent, ProxyError},
     crossbeam_channel::{select, tick, Receiver, Sender},
@@ -27,6 +30,8 @@ pub struct FetchStageManager {
 
 impl FetchStageManager {
     pub fn new(
+        // Relayer config used to update the heartbeat interval
+        relayer_config: Arc<Mutex<RelayerConfig>>,
         // ClusterInfo is used to switch between advertising the proxy's TPU ports and that of this validator's.
         cluster_info: Arc<ClusterInfo>,
         // Channel that heartbeats are received from. Entirely responsible for triggering switch-overs.
@@ -37,13 +42,23 @@ impl FetchStageManager {
         packet_tx: Sender<PacketBatch>,
         exit: Arc<AtomicBool>,
     ) -> Self {
-        let t_hdl = Self::start(
-            cluster_info,
-            heartbeat_rx,
-            packet_intercept_rx,
-            packet_tx,
-            exit,
-        );
+        let t_hdl = Builder::new()
+            .name("fetchStageManager".to_string())
+            .spawn(move || {
+                while !exit.load(Ordering::Relaxed) {
+                    if let Err(e) = Self::start(
+                        &relayer_config,
+                        &cluster_info,
+                        &heartbeat_rx,
+                        &packet_intercept_rx,
+                        &packet_tx,
+                        &exit,
+                    ) {
+                        error!("FetchStageManager errored on {e:?}, restarting now.");
+                    }
+                }
+            })
+            .unwrap();
 
         Self { t_hdl }
     }
@@ -61,97 +76,99 @@ impl FetchStageManager {
     ///      Sets fetch_connected to true, pending_disconnect to false
     ///      Advertises saved contact info
     fn start(
-        cluster_info: Arc<ClusterInfo>,
-        heartbeat_rx: Receiver<HeartbeatEvent>,
-        packet_intercept_rx: Receiver<PacketBatch>,
-        packet_tx: Sender<PacketBatch>,
-        exit: Arc<AtomicBool>,
-    ) -> JoinHandle<()> {
-        Builder::new().name("fetch-stage-manager".into()).spawn(move || {
-            let my_fallback_contact_info = cluster_info.my_contact_info();
+        relayer_config: &Arc<Mutex<RelayerConfig>>,
+        cluster_info: &Arc<ClusterInfo>,
+        heartbeat_rx: &Receiver<HeartbeatEvent>,
+        packet_intercept_rx: &Receiver<PacketBatch>,
+        packet_tx: &Sender<PacketBatch>,
+        exit: &Arc<AtomicBool>,
+    ) -> ProxyResult<()> {
+        let my_fallback_contact_info = cluster_info.my_contact_info();
+        let current_config = relayer_config.lock().unwrap().clone();
 
-            let mut fetch_connected = true;
-            let mut heartbeat_received = false;
-            let mut pending_disconnect = false;
+        let mut fetch_connected = true;
+        let mut heartbeat_received = false;
+        let mut pending_disconnect = false;
 
-            let mut pending_disconnect_ts = Instant::now();
+        let mut pending_disconnect_ts = Instant::now();
 
-            let heartbeat_tick = tick(HEARTBEAT_TIMEOUT);
-            let metrics_tick = tick(METRICS_CADENCE);
-            let mut packets_forwarded = 0;
-            let mut heartbeats_received = 0;
-            loop {
-                select! {
-                    recv(packet_intercept_rx) -> pkt => {
-                        match pkt {
-                            Ok(pkt) => {
-                                if fetch_connected {
-                                    if packet_tx.send(pkt).is_err() {
-                                        error!("{:?}", ProxyError::PacketForwardError);
-                                        return;
-                                    }
-                                    packets_forwarded += 1;
-                                }
-                            }
-                            Err(_) => {
-                                warn!("packet intercept receiver disconnected, shutting down");
-                                return;
+        let config_tick = tick(Duration::from_secs(1));
+        let heartbeat_tick = tick(HEARTBEAT_TIMEOUT);
+        let metrics_tick = tick(METRICS_CADENCE);
+        let mut packets_forwarded = 0;
+        let mut heartbeats_received = 0;
+        loop {
+            select! {
+                recv(packet_intercept_rx) -> pkt => {
+                    match pkt {
+                        Ok(pkt) => {
+                            if fetch_connected {
+                                packet_tx.send(pkt).map_err(|_e| ProxyError::PacketForwardError)?;
+                                packets_forwarded += 1;
                             }
                         }
-                    }
-                    recv(heartbeat_tick) -> _ => {
-                        if exit.load(Ordering::Relaxed) {
-                            break;
+                        Err(_) => {
+                            warn!("packet intercept receiver disconnected, shutting down");
+                            return Err(ProxyError::HeartbeatChannelError);
                         }
-                        if !heartbeat_received && (!fetch_connected || pending_disconnect) {
-                            warn!("heartbeat late, reconnecting fetch stage");
-                            fetch_connected = true;
-                            pending_disconnect = false;
-
-                            // unwrap safe here bc contact_info.tpu(Protocol::QUIC) and contact_info.tpu_forwards(Protocol::QUIC)
-                            // are checked on startup
-                            if let Err(e) = Self::set_tpu_addresses(&cluster_info, my_fallback_contact_info.tpu(Protocol::QUIC).unwrap(), my_fallback_contact_info.tpu_forwards(Protocol::QUIC).unwrap()) {
-                                error!("error setting tpu or tpu_fwd to ({:?}, {:?}), error: {:?}", my_fallback_contact_info.tpu(Protocol::QUIC).unwrap(), my_fallback_contact_info.tpu_forwards(Protocol::QUIC).unwrap(), e);
-                            }
-                            heartbeats_received = 0;
-                        }
-                        heartbeat_received = false;
-                    }
-                    recv(heartbeat_rx) -> tpu_info => {
-                        if let Ok((tpu_addr, tpu_forward_addr)) = tpu_info {
-                            heartbeats_received += 1;
-                            heartbeat_received = true;
-                            if fetch_connected && !pending_disconnect {
-                                info!("received heartbeat while fetch stage connected, pending disconnect after delay");
-                                pending_disconnect_ts = Instant::now();
-                                pending_disconnect = true;
-                            }
-                            if fetch_connected && pending_disconnect && pending_disconnect_ts.elapsed() > DISCONNECT_DELAY {
-                                info!("disconnecting fetch stage");
-                                fetch_connected = false;
-                                pending_disconnect = false;
-                                if let Err(e) = Self::set_tpu_addresses(&cluster_info, tpu_addr, tpu_forward_addr) {
-                                    error!("error setting tpu or tpu_fwd to ({:?}, {:?}), error: {:?}", tpu_addr, tpu_forward_addr, e);
-                                }
-                            }
-                        } else {
-                            {
-                                warn!("relayer heartbeat receiver disconnected, shutting down");
-                                return;
-                            }
-                        }
-                    }
-                    recv(metrics_tick) -> _ => {
-                        datapoint_info!(
-                            "relayer-heartbeat",
-                            ("fetch_stage_packets_forwarded", packets_forwarded, i64),
-                            ("heartbeats_received", heartbeats_received, i64),
-                        );
-
                     }
                 }
+                recv(heartbeat_tick) -> _ => {
+                    if exit.load(Ordering::Relaxed) {
+                        return Ok(());
+                    }
+                    if !heartbeat_received && (!fetch_connected || pending_disconnect) {
+                        warn!("heartbeat late, reconnecting fetch stage");
+                        fetch_connected = true;
+                        pending_disconnect = false;
+
+                        // unwrap safe here bc contact_info.tpu(Protocol::QUIC) and contact_info.tpu_forwards(Protocol::QUIC)
+                        // are checked on startup
+                        if let Err(e) = Self::set_tpu_addresses(&cluster_info, my_fallback_contact_info.tpu(Protocol::QUIC).unwrap(), my_fallback_contact_info.tpu_forwards(Protocol::QUIC).unwrap()) {
+                            error!("error setting tpu or tpu_fwd to ({:?}, {:?}), error: {:?}", my_fallback_contact_info.tpu(Protocol::QUIC).unwrap(), my_fallback_contact_info.tpu_forwards(Protocol::QUIC).unwrap(), e);
+                        }
+                        heartbeats_received = 0;
+                    }
+                    heartbeat_received = false;
+                }
+                recv(heartbeat_rx) -> tpu_info => {
+                    if let Ok((tpu_addr, tpu_forward_addr)) = tpu_info {
+                        heartbeats_received += 1;
+                        heartbeat_received = true;
+                        if fetch_connected && !pending_disconnect {
+                            info!("received heartbeat while fetch stage connected, pending disconnect after delay");
+                            pending_disconnect_ts = Instant::now();
+                            pending_disconnect = true;
+                        }
+                        if fetch_connected && pending_disconnect && pending_disconnect_ts.elapsed() > DISCONNECT_DELAY {
+                            info!("disconnecting fetch stage");
+                            fetch_connected = false;
+                            pending_disconnect = false;
+                            if let Err(e) = Self::set_tpu_addresses(&cluster_info, tpu_addr, tpu_forward_addr) {
+                                error!("error setting tpu or tpu_fwd to ({:?}, {:?}), error: {:?}", tpu_addr, tpu_forward_addr, e);
+                            }
+                        }
+                    } else {
+                        {
+                            warn!("relayer heartbeat receiver disconnected, shutting down");
+                            return Err(ProxyError::HeartbeatChannelError);
+                        }
+                    }
+                }
+                recv(config_tick) -> _ => {
+                    if current_config != relayer_config.lock().unwrap().clone() {
+                        return Err(ProxyError::RelayerConfigChanged);
+                    }
+                }
+                recv(metrics_tick) -> _ => {
+                    datapoint_info!(
+                        "relayer-heartbeat",
+                        ("fetch_stage_packets_forwarded", packets_forwarded, i64),
+                        ("heartbeats_received", heartbeats_received, i64),
+                    );
+                }
             }
-        }).unwrap()
+        }
     }
 
     fn set_tpu_addresses(
