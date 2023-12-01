@@ -1,18 +1,15 @@
-use crate::proxy::relayer_stage::RelayerConfig;
-use crate::proxy::ProxyResult;
-use std::ops::Add;
-use std::sync::Mutex;
 use {
-    crate::proxy::{HeartbeatEvent, ProxyError},
+    crate::proxy::{relayer_stage::RelayerConfig, HeartbeatEvent, ProxyError, ProxyResult},
     crossbeam_channel::{select, tick, Receiver, Sender},
     solana_client::connection_cache::Protocol,
     solana_gossip::{cluster_info::ClusterInfo, contact_info},
     solana_perf::packet::PacketBatch,
     std::{
         net::SocketAddr,
+        ops::Add,
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc,
+            Arc, Mutex,
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
