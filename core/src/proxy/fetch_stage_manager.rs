@@ -129,7 +129,7 @@ impl FetchStageManager {
 
                         // unwrap safe here bc contact_info.tpu(Protocol::QUIC) and contact_info.tpu_forwards(Protocol::QUIC)
                         // are checked on startup
-                        if let Err(e) = Self::set_tpu_addresses(&cluster_info, my_fallback_contact_info.tpu(Protocol::QUIC).unwrap(), my_fallback_contact_info.tpu_forwards(Protocol::QUIC).unwrap()) {
+                        if let Err(e) = Self::set_tpu_addresses(cluster_info, my_fallback_contact_info.tpu(Protocol::QUIC).unwrap(), my_fallback_contact_info.tpu_forwards(Protocol::QUIC).unwrap()) {
                             error!("error setting tpu or tpu_fwd to ({:?}, {:?}), error: {:?}", my_fallback_contact_info.tpu(Protocol::QUIC).unwrap(), my_fallback_contact_info.tpu_forwards(Protocol::QUIC).unwrap(), e);
                         }
                         heartbeats_received = 0;
@@ -149,7 +149,7 @@ impl FetchStageManager {
                             info!("disconnecting fetch stage");
                             fetch_connected = false;
                             pending_disconnect = false;
-                            if let Err(e) = Self::set_tpu_addresses(&cluster_info, tpu_addr, tpu_forward_addr) {
+                            if let Err(e) = Self::set_tpu_addresses(cluster_info, tpu_addr, tpu_forward_addr) {
                                 error!("error setting tpu or tpu_fwd to ({:?}, {:?}), error: {:?}", tpu_addr, tpu_forward_addr, e);
                             }
                         }
