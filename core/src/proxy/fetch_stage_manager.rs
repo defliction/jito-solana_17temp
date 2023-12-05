@@ -40,7 +40,7 @@ impl FetchStageManager {
         exit: Arc<AtomicBool>,
     ) -> Self {
         let t_hdl = Builder::new()
-            .name("fetchStageManager".to_string())
+            .name("solFetchStageMgr".to_string())
             .spawn(move || {
                 while !exit.load(Ordering::Relaxed) {
                     if let Err(e) = Self::start(
@@ -80,6 +80,8 @@ impl FetchStageManager {
         packet_tx: &Sender<PacketBatch>,
         exit: &Arc<AtomicBool>,
     ) -> ProxyResult<()> {
+        // Contact info to gossip to the network if no heartbeats are received from relayer
+
         let my_fallback_contact_info = cluster_info.my_contact_info();
         let local_relayer_config = global_relayer_config.lock().unwrap().clone();
 
