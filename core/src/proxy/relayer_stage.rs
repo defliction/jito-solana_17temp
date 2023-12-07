@@ -154,7 +154,6 @@ impl RelayerStage {
                 let relayer_config = relayer_config.clone();
                 task::spawn_blocking(move || relayer_config.lock().unwrap().clone())
                     .await
-                    .map_err(ProxyError::TokioJoinError)
                     .expect("Failed to get execute tokio task.")
             };
             if !Self::is_valid_relayer_config(&local_relayer_config) {

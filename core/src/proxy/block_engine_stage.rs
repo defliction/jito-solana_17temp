@@ -155,7 +155,6 @@ impl BlockEngineStage {
                 let block_engine_config = block_engine_config.clone();
                 task::spawn_blocking(move || block_engine_config.lock().unwrap().clone())
                     .await
-                    .map_err(ProxyError::TokioJoinError)
                     .expect("Failed to get execute tokio task.")
             };
             if !Self::is_valid_block_engine_config(&local_block_engine_config) {
