@@ -155,7 +155,7 @@ impl BlockEngineStage {
                 let block_engine_config = block_engine_config.clone();
                 task::spawn_blocking(move || block_engine_config.lock().unwrap().clone())
                     .await
-                    .expect("Failed to get execute tokio task.")
+                    .unwrap()
             };
             if !Self::is_valid_block_engine_config(&local_block_engine_config) {
                 sleep(CONNECTION_BACKOFF).await;
@@ -341,7 +341,7 @@ impl BlockEngineStage {
                 }
             })
             .await
-            .map_err(ProxyError::TokioJoinError)?;
+            .unwrap();
         }
 
         Self::consume_bundle_and_packet_stream(
@@ -417,7 +417,7 @@ impl BlockEngineStage {
                     let global_config = global_config.clone();
                     if *local_config != task::spawn_blocking(move || global_config.lock().unwrap().clone())
                         .await
-                        .map_err(ProxyError::TokioJoinError)? {
+                        .unwrap() {
                         return Err(ProxyError::AuthenticationConnectionError("block engine config changed".to_string()));
                     }
 
@@ -440,7 +440,7 @@ impl BlockEngineStage {
                         let access_token = access_token.clone();
                         task::spawn_blocking(move || *access_token.lock().unwrap() = new_token)
                             .await
-                            .map_err(ProxyError::TokioJoinError)?;
+                            .unwrap();
                     }
                     if let Some(new_token) = maybe_new_refresh {
                         num_full_refreshes += 1;
@@ -471,7 +471,7 @@ impl BlockEngineStage {
                         }
                     })
                     .await
-                    .map_err(ProxyError::TokioJoinError)?;
+                    .unwrap();
                 }
             }
         }

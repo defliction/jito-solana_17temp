@@ -398,7 +398,7 @@ impl RelayerStage {
                     let global_config = global_config.clone();
                     if *local_config != task::spawn_blocking(move || global_config.lock().unwrap().clone())
                         .await
-                        .map_err(ProxyError::TokioJoinError)? {
+                        .unwrap() {
                         return Err(ProxyError::AuthenticationConnectionError("relayer config changed".to_string()));
                     }
 
@@ -421,7 +421,7 @@ impl RelayerStage {
                         let access_token = access_token.clone();
                         task::spawn_blocking(move || *access_token.lock().unwrap() = new_token)
                             .await
-                            .map_err(ProxyError::TokioJoinError)?;
+                            .unwrap();
                     }
                     if let Some(new_token) = maybe_new_refresh {
                         num_full_refreshes += 1;

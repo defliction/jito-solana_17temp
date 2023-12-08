@@ -21,7 +21,6 @@ use {
         result,
     },
     thiserror::Error,
-    tokio::task::JoinError,
     tonic::Status,
 };
 
@@ -98,7 +97,4 @@ pub enum ProxyError {
 
     #[error("MethodError: {0:?}")]
     MethodError(String),
-
-    #[error("TokioJoinError: {0:?}")]
-    TokioJoinError(JoinError),
 }
