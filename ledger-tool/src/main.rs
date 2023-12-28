@@ -3006,7 +3006,7 @@ fn main() {
                     process_options,
                     snapshot_archive_path,
                     incremental_snapshot_archive_path,
-                    true,
+                    false, // want to load snapshots <= halt_at_slot
                 );
                 let mut bank = bank_forks
                     .read()
