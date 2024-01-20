@@ -1,8 +1,5 @@
 use {
-    crate::{
-        claim_mev_workflow::ClaimMevError, reclaim_rent_workflow::ClaimMevError::AnchorError,
-        sign_and_send_transactions_with_retries_multi_rpc,
-    },
+    crate::{claim_mev_workflow::ClaimMevError, reclaim_rent_workflow::ClaimMevError::AnchorError},
     anchor_lang::AccountDeserialize,
     itertools::Itertools,
     jito_tip_distribution::{
@@ -64,75 +61,73 @@ pub async fn reclaim_rent(
     let mut failed_transaction_count = 0usize;
     let signer_pubkey = signer.pubkey();
     loop {
-        let (transactions, get_pa_elapsed, transaction_prepare_elaspsed) = build_transactions(
-            blockhash_rpc_client.clone(),
-            &tip_distribution_program_id,
-            &signer_pubkey,
-            should_reclaim_tdas,
-            micro_lamports_per_compute_unit,
-        )
-        .await?;
-        datapoint_info!(
-            "claim_mev_workflow-prepare_rent_reclaim_transactions",
-            ("attempt", retries, i64),
-            ("transaction_count", transactions.len(), i64),
-            ("account_fetch_latency_us", get_pa_elapsed.as_micros(), i64),
-            (
-                "transaction_prepare_latency_us",
-                transaction_prepare_elaspsed.as_micros(),
-                i64
-            ),
-        );
-        let transactions_len = transactions.len();
-        if transactions.is_empty() {
-            info!("Finished reclaim rent after {retries} retries, {failed_transaction_count} failed requests.");
-            return Ok(());
-        }
-
-        info!("Sending {} rent reclaim transactions", transactions.len());
-        let send_start = Instant::now();
-        let (remaining_transaction_count, new_failed_transaction_count) =
-            sign_and_send_transactions_with_retries_multi_rpc(
-                &signer,
-                &blockhash_rpc_client,
-                &rpc_clients,
-                transactions,
-                max_loop_duration,
-            )
-            .await;
-        failed_transaction_count =
-            failed_transaction_count.saturating_add(new_failed_transaction_count);
-
-        datapoint_info!(
-            "claim_mev_workflow-send_reclaim_rent_transactions",
-            ("attempt", retries, i64),
-            ("transaction_count", transactions_len, i64),
-            (
-                "successful_transaction_count",
-                transactions_len.saturating_sub(remaining_transaction_count),
-                i64
-            ),
-            (
-                "remaining_transaction_count",
-                remaining_transaction_count,
-                i64
-            ),
-            (
-                "failed_transaction_count",
-                new_failed_transaction_count,
-                i64
-            ),
-            ("send_latency_us", send_start.elapsed().as_micros(), i64),
-        );
-
-        if retries >= max_loop_retries {
-            return Err(ClaimMevError::MaxSendTransactionRetriesExceeded {
-                attempts: max_loop_retries,
-                remaining_transaction_count,
-                failed_transaction_count,
-            });
-        }
-        retries = retries.saturating_add(1);
+        // let (transactions, get_pa_elapsed, transaction_prepare_elaspsed) = build_transactions(
+        //     blockhash_rpc_client.clone(),
+        //     &tip_distribution_program_id,
+        //     &signer_pubkey,
+        //     should_reclaim_tdas,
+        //     micro_lamports_per_compute_unit,
+        // )
+        // .await?;
+        // datapoint_info!(
+        //     "claim_mev_workflow-prepare_rent_reclaim_transactions",
+        //     ("attempt", retries, i64),
+        //     ("transaction_count", transactions.len(), i64),
+        //     ("account_fetch_latency_us", get_pa_elapsed.as_micros(), i64),
+        //     (
+        //         "transaction_prepare_latency_us",
+        //         transaction_prepare_elaspsed.as_micros(),
+        //         i64
+        //     ),
+        // );
+        // let transactions_len = transactions.len();
+        // if transactions.is_empty() {
+        //     info!("Finished reclaim rent after {retries} retries, {failed_transaction_count} failed requests.");
+        //     return Ok(());
+        // }
+        //
+        // info!("Sending {} rent reclaim transactions", transactions.len());
+        // let send_start = Instant::now();
+        // let (remaining_transaction_count, new_failed_transaction_count) = blast_transactions(
+        //     &signer,
+        //     &blockhash_rpc_client,
+        //     transactions,
+        //     max_loop_duration,
+        // )
+        // .await?;
+        // failed_transaction_count =
+        //     failed_transaction_count.saturating_add(new_failed_transaction_count);
+        //
+        // datapoint_info!(
+        //     "claim_mev_workflow-send_reclaim_rent_transactions",
+        //     ("attempt", retries, i64),
+        //     ("transaction_count", transactions_len, i64),
+        //     (
+        //         "successful_transaction_count",
+        //         transactions_len.saturating_sub(remaining_transaction_count),
+        //         i64
+        //     ),
+        //     (
+        //         "remaining_transaction_count",
+        //         remaining_transaction_count,
+        //         i64
+        //     ),
+        //     (
+        //         "failed_transaction_count",
+        //         new_failed_transaction_count,
+        //         i64
+        //     ),
+        //     ("send_latency_us", send_start.elapsed().as_micros(), i64),
+        // );
+        //
+        // if retries >= max_loop_retries {
+        //     return Err(ClaimMevError::MaxSendTransactionRetriesExceeded {
+        //         attempts: max_loop_retries,
+        //         remaining_transaction_count,
+        //         failed_transaction_count,
+        //     });
+        // }
+        // retries = retries.saturating_add(1);
     }
 }
 

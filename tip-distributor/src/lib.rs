@@ -4,6 +4,11 @@ pub mod merkle_root_upload_workflow;
 pub mod reclaim_rent_workflow;
 pub mod stake_meta_generator_workflow;
 
+use rand::rngs::OsRng;
+use solana_client::rpc_client::SerializableTransaction;
+use solana_rpc_client_api::config::RpcSendTransactionConfig;
+use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
+use tokio::time::sleep;
 use {
     crate::{
         merkle_root_generator_workflow::MerkleRootGeneratorError,
@@ -21,7 +26,6 @@ use {
         TIP_ACCOUNT_SEED_7,
     },
     log::*,
-    rand::prelude::SliceRandom,
     serde::{de::DeserializeOwned, Deserialize, Serialize},
     solana_client::{nonblocking::rpc_client::RpcClient, rpc_client::RpcClient as SyncRpcClient},
     solana_merkle_tree::MerkleTree,
@@ -54,13 +58,10 @@ use {
         fs::File,
         io::BufReader,
         path::PathBuf,
-        sync::{
-            atomic::{AtomicUsize, Ordering},
-            Arc,
-        },
+        sync::Arc,
         time::{Duration, Instant},
     },
-    tokio::sync::{RwLock, Semaphore},
+    tokio::sync::Semaphore,
 };
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
@@ -478,108 +479,6 @@ pub fn derive_tip_distribution_account_address(
 pub const MAX_RETRIES: usize = 5;
 pub const FAIL_DELAY: Duration = Duration::from_millis(100);
 
-/// Returns unprocessed transactions, along with fail count
-pub async fn sign_and_send_transactions_with_retries_multi_rpc(
-    signer: &Arc<Keypair>,
-    blockhash_rpc_client: &Arc<RpcClient>,
-    rpc_clients: &Arc<Vec<Arc<RpcClient>>>,
-    mut transactions: Vec<Transaction>,
-    max_loop_duration: Duration,
-) -> (
-    usize, /* remaining txn count */
-    usize, /* failed txn count */
-) {
-    let error_count = Arc::new(AtomicUsize::default());
-    let blockhash = Arc::new(RwLock::new(
-        blockhash_rpc_client
-            .get_latest_blockhash()
-            .await
-            .expect("fetch latest blockhash"),
-    ));
-    let transactions_receiver = {
-        let (transactions_sender, transactions_receiver) = crossbeam_channel::unbounded();
-        let mut rng = rand::thread_rng();
-        transactions.shuffle(&mut rng); // shuffle to avoid racing for the same order of txns as other claim-tip processes
-        transactions
-            .into_iter()
-            .for_each(|txn| transactions_sender.send(txn).unwrap());
-        transactions_receiver
-    };
-    let blockhash_refresh_handle = {
-        let blockhash_rpc_client = blockhash_rpc_client.clone();
-        let blockhash = blockhash.clone();
-        let transactions_receiver = transactions_receiver.clone();
-        tokio::spawn(async move {
-            let start = Instant::now();
-            let mut last_blockhash_update = Instant::now();
-            while start.elapsed() < max_loop_duration && !transactions_receiver.is_empty() {
-                // ensure we always have a recent blockhash
-                if last_blockhash_update.elapsed() > Duration::from_secs(2) {
-                    let hash = blockhash_rpc_client
-                        .get_latest_blockhash()
-                        .await
-                        .expect("fetch latest blockhash");
-                    info!(
-                        "Got blockhash {hash:?}. Sending {} transactions to claim mev tips.",
-                        transactions_receiver.len()
-                    );
-                    *blockhash.write().await = hash;
-                    last_blockhash_update = Instant::now();
-                }
-            }
-
-            info!(
-                "Exited blockhash refresh thread. {} transactions remain.",
-                transactions_receiver.len()
-            );
-            transactions_receiver.len()
-        })
-    };
-    let send_handles = rpc_clients
-        .iter()
-        .map(|rpc_client| {
-            let signer = signer.clone();
-            let transactions_receiver = transactions_receiver.clone();
-            let rpc_client = rpc_client.clone();
-            let error_count = error_count.clone();
-            let blockhash = blockhash.clone();
-            tokio::spawn(async move {
-                let mut iterations = 0usize;
-                while let Ok(txn) = transactions_receiver.recv() {
-                    let mut retries = 0usize;
-                    while retries < MAX_RETRIES {
-                        iterations = iterations.saturating_add(1);
-                        let (_signed_txn, res) =
-                            signed_send(&signer, &rpc_client, *blockhash.read().await, txn.clone())
-                                .await;
-                        match res {
-                            Ok(_) => break,
-                            Err(_) => {
-                                retries = retries.saturating_add(1);
-                                error_count.fetch_add(1, Ordering::Relaxed);
-                                tokio::time::sleep(FAIL_DELAY).await;
-                            }
-                        }
-                    }
-                }
-
-                info!("Exited send thread. Ran {iterations} times.");
-            })
-        })
-        .collect_vec();
-
-    for handle in send_handles {
-        if let Err(e) = handle.await {
-            warn!("Error joining handle: {e:?}")
-        }
-    }
-    let remaining_transaction_count = blockhash_refresh_handle.await.unwrap();
-    (
-        remaining_transaction_count,
-        error_count.load(Ordering::Relaxed),
-    )
-}
-
 pub async fn sign_and_send_transactions_with_retries(
     signer: &Keypair,
     rpc_client: &RpcClient,
@@ -699,50 +598,17 @@ async fn signed_send(
     (txn, res)
 }
 
-/// Fetch accounts in parallel batches with retries.
 async fn get_batched_accounts(
     rpc_client: &RpcClient,
-    max_concurrent_rpc_get_reqs: usize,
-    pubkeys: Vec<Pubkey>,
+    pubkeys: &[Pubkey],
 ) -> solana_rpc_client_api::client_error::Result<HashMap<Pubkey, Option<Account>>> {
-    let semaphore = Arc::new(Semaphore::new(max_concurrent_rpc_get_reqs));
-    let futs = pubkeys.chunks(MAX_MULTIPLE_ACCOUNTS).map(|pubkeys| {
-        let semaphore = semaphore.clone();
+    let mut batched_accounts = HashMap::new();
 
-        async move {
-            let _permit = semaphore.acquire_owned().await.unwrap(); // wait until our turn
-            let mut retries = 0usize;
-            loop {
-                match rpc_client.get_multiple_accounts(pubkeys).await {
-                    Ok(accts) => return Ok(accts),
-                    Err(e) => {
-                        retries = retries.saturating_add(1);
-                        if retries == MAX_RETRIES {
-                            datapoint_error!(
-                                "claim_mev_workflow-get_batched_accounts_error",
-                                ("pubkeys", format!("{pubkeys:?}"), String),
-                                ("error", 1, i64),
-                                ("err_type", "fetch_account", String),
-                                ("err_str", e.to_string(), String)
-                            );
-                            return Err(e);
-                        }
-                        tokio::time::sleep(FAIL_DELAY).await;
-                    }
-                }
-            }
-        }
-    });
-
-    let claimant_accounts = futures::future::join_all(futs)
-        .await
-        .into_iter()
-        .collect::<solana_rpc_client_api::client_error::Result<Vec<Vec<Option<Account>>>>>()? // fail on single error
-        .into_iter()
-        .flatten()
-        .collect_vec();
-
-    Ok(pubkeys.into_iter().zip(claimant_accounts).collect())
+    for pubkeys_chunk in pubkeys.chunks(MAX_MULTIPLE_ACCOUNTS) {
+        let accounts = rpc_client.get_multiple_accounts(pubkeys).await?;
+        batched_accounts.extend(pubkeys_chunk.into_iter().cloned().zip(accounts));
+    }
+    Ok(batched_accounts)
 }
 
 /// Calculates the minimum balance needed to be rent-exempt

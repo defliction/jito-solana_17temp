@@ -37,21 +37,9 @@ struct Args {
     #[arg(long, env)]
     keypair_path: PathBuf,
 
-    /// Number of unique connections to the RPC server for sending txns
-    #[arg(long, env, default_value_t = 128)]
-    rpc_send_connection_count: u64,
-
-    /// Rate-limits the maximum number of GET requests per RPC connection
-    #[arg(long, env, default_value_t = 256)]
-    max_concurrent_rpc_get_reqs: usize,
-
-    /// Number of retries for main claim send loop. Loop is time bounded.
-    #[arg(long, env, default_value_t = 5)]
-    max_loop_retries: u64,
-
-    /// Limits how long before send loop runs before stopping. Defaults to 10 mins
-    #[arg(long, env, default_value_t = 10 * 60)]
-    max_loop_duration_secs: u64,
+    /// Limits how long before send loop runs before stopping
+    #[arg(long, env, default_value_t = 60 * 60)]
+    max_retry_duration_secs: u64,
 
     /// Specifies whether to reclaim any rent.
     #[arg(long, env, default_value_t = true)]
@@ -77,7 +65,7 @@ async fn main() -> Result<(), ClaimMevError> {
     let keypair = Arc::new(read_keypair_file(&args.keypair_path).expect("read keypair file"));
     let merkle_trees: GeneratedMerkleTreeCollection =
         read_json_from_file(&args.merkle_trees_path).expect("read GeneratedMerkleTreeCollection");
-    let max_loop_duration = Duration::from_secs(args.max_loop_duration_secs);
+    let max_loop_duration = Duration::from_secs(args.max_retry_duration_secs);
 
     info!(
         "Starting to claim mev tips for epoch: {}",
@@ -88,11 +76,8 @@ async fn main() -> Result<(), ClaimMevError> {
     match claim_mev_tips(
         merkle_trees.clone(),
         args.rpc_url.clone(),
-        args.rpc_send_connection_count,
-        args.max_concurrent_rpc_get_reqs,
-        &args.tip_distribution_program_id,
+        args.tip_distribution_program_id,
         keypair.clone(),
-        args.max_loop_retries,
         max_loop_duration,
         args.micro_lamports_per_compute_unit,
     )
@@ -132,10 +117,10 @@ async fn main() -> Result<(), ClaimMevError> {
         let start = Instant::now();
         match reclaim_rent(
             args.rpc_url,
-            args.rpc_send_connection_count,
+            1, // TODO (LB)
             args.tip_distribution_program_id,
             keypair,
-            args.max_loop_retries,
+            1, // TODO (LB)
             max_loop_duration,
             args.should_reclaim_tdas,
             args.micro_lamports_per_compute_unit,
