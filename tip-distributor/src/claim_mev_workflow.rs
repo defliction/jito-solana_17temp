@@ -182,6 +182,8 @@ pub async fn claim_mev_tips(
         );
 
         let blockhash = rpc_client.get_latest_blockhash().await?;
+
+        let start = Instant::now();
         let mut claim_transactions: HashMap<Signature, Transaction> = claim_transactions
             .into_iter()
             .map(|mut tx| {
@@ -189,6 +191,7 @@ pub async fn claim_mev_tips(
                 (*tx.get_signature(), tx)
             })
             .collect();
+        info!("took {:?} to sign transactions", start.elapsed());
 
         let send_start = Instant::now();
         while send_start.elapsed() < loop_time {
