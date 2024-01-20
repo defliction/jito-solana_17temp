@@ -95,6 +95,8 @@ pub async fn get_claim_transactions_for_valid_unclaimed(
         merkle_trees.epoch
     );
 
+    let start = Instant::now();
+
     let tda_pubkeys = merkle_trees
         .generated_merkle_trees
         .iter()
@@ -114,12 +116,15 @@ pub async fn get_claim_transactions_for_valid_unclaimed(
         .collect_vec();
     let claim_statuses = crate::get_batched_accounts(&rpc_client, &claim_status_pubkeys).await?;
 
+    let elapsed_us = start.elapsed().as_micros();
+
     // can be helpful for determining mismatch in state between requested and read
     let tdas_onchain = tdas.values().filter(|a| a.is_some()).count();
     let claimants_onchain = claimants.values().filter(|a| a.is_some()).count();
     let claim_statuses_onchain = claim_statuses.values().filter(|a| a.is_some()).count();
     datapoint_info!(
-        "get_claim_transactions_for_valid_unclaimed",
+        "get_claim_transactions-account_data",
+        ("elapsed_us", elapsed_us, i64),
         ("tdas", tda_pubkeys.len(), i64),
         ("tdas_onchain", tdas_onchain, i64),
         ("claimants", claimant_pubkeys.len(), i64),
