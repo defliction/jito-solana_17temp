@@ -605,7 +605,7 @@ async fn get_batched_accounts(
     let mut batched_accounts = HashMap::new();
 
     for pubkeys_chunk in pubkeys.chunks(MAX_MULTIPLE_ACCOUNTS) {
-        let accounts = rpc_client.get_multiple_accounts(pubkeys).await?;
+        let accounts = rpc_client.get_multiple_accounts(pubkeys_chunk).await?;
         batched_accounts.extend(pubkeys_chunk.into_iter().cloned().zip(accounts));
     }
     Ok(batched_accounts)
