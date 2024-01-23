@@ -168,12 +168,16 @@ pub async fn claim_mev_tips(
             ("claim_transactions_left", all_claim_transactions.len(), i64),
         );
 
-        if let Some((start_balance, desired_balance, sol_to_deposit)) = is_sufficient_balance(
-            &keypair.pubkey(),
-            &rpc_client,
-            all_claim_transactions.len() as u64,
-        )
-        .await
+        if all_claim_transactions.is_empty() {
+            return Ok(());
+        }
+
+        all_claim_transactions.shuffle(&mut thread_rng());
+        let transactions: Vec<_> = all_claim_transactions.into_iter().take(10_000).collect();
+
+        // only check balance for the ones we need to currently send since reclaim rent running in parallel
+        if let Some((start_balance, desired_balance, sol_to_deposit)) =
+            is_sufficient_balance(&keypair.pubkey(), &rpc_client, transactions.len() as u64).await
         {
             return Err(ClaimMevError::InsufficientBalance {
                 desired_balance,
@@ -182,13 +186,6 @@ pub async fn claim_mev_tips(
                 sol_to_deposit,
             });
         }
-
-        if all_claim_transactions.is_empty() {
-            return Ok(());
-        }
-
-        all_claim_transactions.shuffle(&mut thread_rng());
-        let transactions: Vec<_> = all_claim_transactions.into_iter().take(10_000).collect();
 
         let blockhash = rpc_client.get_latest_blockhash().await?;
         let _ = send_until_blockhash_expires(&rpc_client, transactions, blockhash, &keypair).await;
