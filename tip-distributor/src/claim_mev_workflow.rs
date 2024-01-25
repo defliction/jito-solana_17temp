@@ -125,7 +125,7 @@ pub async fn get_claim_transactions_for_valid_unclaimed(
         ("claim_statuses_onchain", claim_statuses.len(), i64),
     );
 
-    let transactions = build_transactions_new(
+    let transactions = build_mev_claim_transactions(
         tip_distribution_program_id,
         merkle_trees,
         tdas,
@@ -255,7 +255,7 @@ pub async fn claim_mev_tips(
 /// - the claimant must have enough lamports post-claim to be rent-exempt.
 ///   - note: there aren't any rent exempt accounts on solana mainnet anymore.
 /// - it must not have already been claimed.
-fn build_transactions_new(
+fn build_mev_claim_transactions(
     tip_distribution_program_id: Pubkey,
     merkle_trees: &GeneratedMerkleTreeCollection,
     tdas: HashMap<Pubkey, Account>,
@@ -285,7 +285,7 @@ fn build_transactions_new(
         .collect();
 
     datapoint_info!(
-        "build_transactions_new",
+        "build_mev_claim_transactions",
         (
             "tip_distribution_accounts",
             tip_distribution_accounts.len(),
