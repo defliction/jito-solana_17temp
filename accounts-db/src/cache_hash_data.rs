@@ -200,9 +200,9 @@ pub(crate) struct CacheHashData {
 
 impl Drop for CacheHashData {
     fn drop(&mut self) {
-        if self.should_delete_old_cache_files_on_drop {
-            self.delete_old_cache_files();
-        }
+        
+        self.delete_old_cache_files();
+        
         self.stats.report();
     }
 }
